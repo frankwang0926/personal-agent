@@ -20,3 +20,26 @@ def execute_tool(tool_name: str, arguments: dict):
     
     tool_function = TOOL_REGISTRY[tool_name]
     return tool_function(**arguments)
+
+CALCULATOR_TOOL = {
+    "type": "function",
+    "name": "calculator",
+    "description": "A simple calculator that can perform basic arithmetic operations.",
+    "strict": True,
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "a": {"type": "number", "description": "The first number."},
+            "b": {"type": "number", "description": "The second number."},
+            "operation": {
+                "type": "string",
+                "enum": ["add", "subtract", "multiply", "divide"],
+                "description": "The arithmetic operation to perform."
+            }
+        },
+        "required": ["a", "b", "operation"],
+        "additionalProperties": False
+    }
+}
+
+
