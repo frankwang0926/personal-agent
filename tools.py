@@ -21,6 +21,20 @@ def execute_tool(tool_name: str, arguments: dict):
     tool_function = TOOL_REGISTRY[tool_name]
     return tool_function(**arguments)
 
+def execute_tool_safely(tool_name: str, arguments: dict) -> dict:
+    try:
+        result = execute_tool(tool_name, arguments)
+        return {"ok": True, "result": result}
+    except (ValueError, ZeroDivisionError) as e:
+        return {
+            "ok": False, 
+            "error": {
+                "type": type(e).__name__, 
+                "message": str(e)
+            }
+        }
+
+
 CALCULATOR_TOOL = {
     "type": "function",
     "name": "calculator",

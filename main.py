@@ -1,4 +1,4 @@
-from tools import CALCULATOR_TOOL, execute_tool
+from tools import CALCULATOR_TOOL, execute_tool, execute_tool_safely
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
@@ -43,7 +43,7 @@ def run_agent(
                 print("Arguments:", item.arguments)
                 print("Call ID:", item.call_id)
 
-                result = execute_tool(item.name, json.loads(item.arguments))  # Execute the tool with the provided arguments
+                result = execute_tool_safely(item.name, json.loads(item.arguments))  # Execute the tool with the provided arguments
                 print("Result of tool execution:", result)
 
                 input_list.append(
