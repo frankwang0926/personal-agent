@@ -1,4 +1,4 @@
-from tools import CALCULATOR_TOOL, execute_tool, execute_tool_safely
+from tools import CALCULATOR_TOOL, execute_tool, execute_tool_safely, parse_tool_arguments
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
@@ -43,7 +43,25 @@ def run_agent(
                 print("Arguments:", item.arguments)
                 print("Call ID:", item.call_id)
 
-                result = execute_tool_safely(item.name, json.loads(item.arguments))  # Execute the tool with the provided arguments
+                try:
+                    arguments_dict = parse_tool_arguments(item.arguments)  # Parse the JSON string into a dictionary
+                except ValueError as e:
+                    input_list.append( 
+                        {
+                            "type": "function_call_output", 
+                            "call_id": item.call_id, 
+                            "output": json.dumps({
+                                        "ok": False, 
+                                        "error": {
+                                            "type": type(e).__name__, 
+                                            "message": str(e)
+                                        }
+                                    })
+                        }
+                    )
+                    continue
+
+                result = execute_tool_safely(item.name, arguments_dict)  # Execute the tool with the provided arguments
                 print("Result of tool execution:", result)
 
                 input_list.append(

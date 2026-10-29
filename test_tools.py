@@ -1,5 +1,5 @@
 import pytest
-from tools import calculator, execute_tool, execute_tool_safely
+from tools import calculator, execute_tool, execute_tool_safely, parse_tool_arguments
 
 def test_add_positive():
     assert calculator(2, 3, "add") == 5
@@ -68,3 +68,33 @@ def test_execute_tool_safely_invalid_operation():
             "message": "Invalid operation"
         }
     }
+
+def test_parse_tool_arguments_valid():
+    arguments_json = '{"a": 2}'
+    result = parse_tool_arguments(arguments_json)
+    assert result == {"a": 2}
+
+def test_parse_tool_arguments_empty():
+    arguments_json = '{}'
+    result = parse_tool_arguments(arguments_json)
+    assert result == {}
+
+def test_parse_tool_arguments_invalid_json():
+    arguments_json = '{bad json'
+    with pytest.raises(ValueError):
+        parse_tool_arguments(arguments_json)
+
+def test_parse_tool_arguments_array():
+    arguments_json = '[2, 3]'
+    with pytest.raises(ValueError):
+        parse_tool_arguments(arguments_json)
+
+def test_parse_tool_arguments_null():
+    arguments_json = 'null'
+    with pytest.raises(ValueError):
+        parse_tool_arguments(arguments_json)
+
+def test_parse_tool_arguments_number():
+    arguments_json = '42'
+    with pytest.raises(ValueError):
+        parse_tool_arguments(arguments_json)

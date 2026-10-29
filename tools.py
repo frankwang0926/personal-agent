@@ -1,3 +1,6 @@
+import json
+
+
 def calculator(a: float, b: float, operation: str) -> float:
     if operation == "add":
         return a + b
@@ -33,6 +36,13 @@ def execute_tool_safely(tool_name: str, arguments: dict) -> dict:
                 "message": str(e)
             }
         }
+
+def parse_tool_arguments(arguments_json: str) -> dict:
+    arguments = json.loads(arguments_json)
+    if isinstance(arguments, dict):
+        return arguments
+    else:
+        raise ValueError("Tool arguments must be a JSON object.")
 
 
 CALCULATOR_TOOL = {
