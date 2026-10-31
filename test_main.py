@@ -138,7 +138,7 @@ def test_agent_recalls_memory_with_fresh_conversation(tmp_path, monkeypatch):
         assert run_agent(client, prompt, max_steps=2, history=history) == answer
         assert len(requests) == 2
         assert requests[0]["input"] == [{"role": "user", "content": prompt}]
-        assert {tool["name"] for tool in requests[0]["tools"]} == {
+        assert {tool["name"] for tool in requests[0]["tools"]} >= {
             "calculator", "remember", "recall"
         }
         results = [item for item in requests[1]["input"]
@@ -191,6 +191,84 @@ def test_agent_reports_missing_memory_and_continues(tmp_path, monkeypatch):
     assert payload["ok"] is False
     assert payload["error"]["type"] == "ValueError"
     assert payload["error"]["message"]
+    assert not (tmp_path / "memory.json").exists()
+
+
+def test_agent_task_lifecycle_with_fresh_history(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    def run_turn(prompt, calls):
+        requests = []
+        replies = iter([
+            *[
+                SimpleNamespace(
+                    output=[ResponseFunctionToolCall(
+                        id=f"fc_task_{index}", type="function_call", name=name,
+                        call_id=f"call_task_{index}", arguments=json.dumps(arguments),
+                    )],
+                    output_text="",
+                )
+                for index, (name, arguments) in enumerate(calls)
+            ],
+            SimpleNamespace(output=[], output_text="Mock final response"),
+        ])
+        client = Mock()
+
+        def respond(**kwargs):
+            requests.append(deepcopy(kwargs))
+            return next(replies)
+
+        client.responses.create.side_effect = respond
+        assert run_agent(client, prompt, history=[]) == "Mock final response"
+        assert len(requests) == len(calls) + 1
+        assert requests[0]["input"] == [{"role": "user", "content": prompt}]
+        assert {tool["name"] for tool in requests[0]["tools"]} == {
+            "calculator", "remember", "recall",
+            "create_task", "list_tasks", "update_task",
+        }
+        outputs = [item for item in requests[-1]["input"]
+                   if isinstance(item, dict)
+                   and item.get("type") == "function_call_output"]
+        assert [item["call_id"] for item in outputs] == [
+            f"call_task_{index}" for index in range(len(calls))
+        ]
+        return [json.loads(item["output"]) for item in outputs]
+
+    created = run_turn("I need to call Pu", [("create_task", {"title": "Call Pu"})])[0]
+    assert created["ok"] is True
+    task_id = created["result"]["id"]
+    assert created["result"] == {"id": task_id, "title": "Call Pu", "status": "open"}
+
+    listed = run_turn("What tasks do I have?", [("list_tasks", {})])[0]
+    assert listed == {"ok": True, "result": [created["result"]]}
+
+    renamed = run_turn("Rename that task to Call Pu about lunch", [
+        ("list_tasks", {}),
+        ("update_task", {"task_id": task_id, "title": "Call Pu about lunch", "status": None}),
+    ])[-1]
+    assert renamed == {"ok": True, "result": {
+        "id": task_id, "title": "Call Pu about lunch", "status": "open",
+    }}
+
+    completed = run_turn("I just called Pu", [
+        ("list_tasks", {}),
+        ("update_task", {"task_id": task_id, "title": None, "status": "done"}),
+    ])[-1]
+    assert completed == {"ok": True, "result": {
+        "id": task_id, "title": "Call Pu about lunch", "status": "done",
+    }}
+    assert json.loads((tmp_path / "tasks.json").read_text(encoding="utf-8")) == [
+        completed["result"]
+    ]
+
+    before = (tmp_path / "tasks.json").read_bytes()
+    failed = run_turn("Rename the task to a blank title", [
+        ("update_task", {"task_id": task_id, "title": "  ", "status": None}),
+    ])[0]
+    assert failed["ok"] is False
+    assert failed["error"]["type"] == "ValueError"
+    assert (tmp_path / "tasks.json").read_bytes() == before
+    assert not (tmp_path / "conversation.json").exists()
     assert not (tmp_path / "memory.json").exists()
 
 

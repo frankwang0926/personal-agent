@@ -53,7 +53,10 @@ def create_task(title: str, path: str = "tasks.json") -> dict:
 def list_tasks(path: str = "tasks.json") -> list:
     try:
         with open(path, "r", encoding="utf-8") as file:
-            return json.load(file)
+            result = json.load(file)
+            if not isinstance(result, list):
+                raise ValueError("Tasks file must contain a list of tasks.")
+            return result
     except FileNotFoundError:
         return []
 

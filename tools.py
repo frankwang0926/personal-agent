@@ -1,5 +1,6 @@
 import json
 from memory import remember, recall
+from task import create_task, list_tasks, update_task
 
 def calculator(a: float, b: float, operation: str) -> float:
     if operation == "add":
@@ -18,8 +19,11 @@ def calculator(a: float, b: float, operation: str) -> float:
 TOOL_REGISTRY = {
     "calculator": calculator, 
     "remember": remember, 
-    "recall": recall
-    }
+    "recall": recall,
+    "create_task": create_task,
+    "list_tasks": list_tasks,
+    "update_task": update_task
+}
 
 def execute_tool(tool_name: str, arguments: dict):
     if tool_name not in TOOL_REGISTRY:

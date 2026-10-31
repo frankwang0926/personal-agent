@@ -1,29 +1,34 @@
 from state import load_history, save_history
 from tools import CALCULATOR_TOOL, execute_tool_safely, parse_tool_arguments
 from memory_schemas import REMEMBER_TOOL, RECALL_TOOL
+from task_schemas import CREATE_TASK_TOOL, LIST_TASKS_TOOL, UPDATE_TASK_TOOL
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
 import json
 
 system_prompt = """
-You are a personal assistant with calculator and persistent memory tools.
+You are a personal assistant with calculator, persistent memory, and task tools.
 
 Use calculator for arithmetic and base your answer on its returned result.
 
-Use remember only when the user explicitly asks you to store or update a fact.
-Choose a stable, descriptive key such as project_name. Preserve an exact key
-provided by the user.
+Store personal facts only when the user explicitly requests it. Distinguish
+information from conversation history from facts retrieved through memory tools.
 
-Use recall to retrieve stored facts by their exact keys. If the key is unclear,
-ask the user to clarify. Never invent a stored fact.
+Task tools are the source of truth for tasks, rather than conversation history
+or personal memory. Read current tasks before modifying them, and clarify
+ambiguous references. Change only what the user requested. Recording a task
+does not perform it or schedule a reminder.
 
-Check each tool result's ok field. Claim success only when ok is true.
-If recall reports a missing fact, explain that it was not found.
-If another tool fails, explain the error or correct the request when appropriate.
+For task capture, record clear intentions using the user's wording. Preserve
+unfamiliar names and abbreviations; do not assume they are typos or incomplete.
+Do not require contact details, dates, or other execution details merely to
+record a task, and do not invent missing details. Ask for clarification only
+when the action itself is unclear or an update could affect the wrong task.
 
-Clearly distinguish facts found in conversation history from facts retrieved
-using recall. Keep responses concise.
+Base answers and confirmations on tool results. Claim an operation succeeded
+only when its result has ok=true. Report missing information and failures
+honestly; never invent facts, IDs, or completed actions. Keep responses concise.
 """
 
 def run_agent(
@@ -46,7 +51,7 @@ def run_agent(
         i += 1
         response = client.responses.create(
             model="gpt-6-luna",
-            tools=[CALCULATOR_TOOL, REMEMBER_TOOL, RECALL_TOOL],
+            tools=[CALCULATOR_TOOL, REMEMBER_TOOL, RECALL_TOOL, CREATE_TASK_TOOL, LIST_TASKS_TOOL, UPDATE_TASK_TOOL],
             input=history,
             instructions=system_prompt,
         )

@@ -6,6 +6,21 @@ import pytest
 import task as task_store
 
 
+def test_list_tasks_missing_file_is_empty_without_creating_file(tmp_path):
+    path = tmp_path / "tasks.json"
+    assert task_store.list_tasks(str(path)) == []
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("contents", ['{"wrong":"object"}', "[unfinished"])
+def test_list_tasks_rejects_invalid_storage_without_writing(tmp_path, contents):
+    path = tmp_path / "tasks.json"
+    path.write_text(contents, encoding="utf-8")
+    with pytest.raises(ValueError):
+        task_store.list_tasks(str(path))
+    assert path.read_text(encoding="utf-8") == contents
+
+
 def test_create_task_returns_persisted_record(tmp_path):
     path = tmp_path / "tasks.json"
     result = task_store.create_task("  Review my agent loop  ", str(path))
