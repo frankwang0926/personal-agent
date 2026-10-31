@@ -1,3 +1,4 @@
+from state import load_history, save_history
 from tools import CALCULATOR_TOOL, execute_tool, execute_tool_safely, parse_tool_arguments
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -14,11 +15,16 @@ def run_agent(
     client: OpenAI,
     user_request: str,
     max_steps: int = 5,
+    history: list | None = None,
 ) -> str:
     if max_steps <= 0:
         raise ValueError("max_steps must be a positive integer.")
-    
-    input_list = [{"role": "user", "content": user_request}]
+
+    if history is None:
+        history = []
+
+    history.append({"role": "user", "content": user_request})
+
     i = 0 
     while i < max_steps:
         function_call = False
@@ -26,11 +32,11 @@ def run_agent(
         response = client.responses.create(
             model="gpt-6-luna",
             tools=[CALCULATOR_TOOL],
-            input=input_list,
+            input=history,
             instructions=system_prompt,
         )
 
-        input_list += response.output
+        history += response.output
         print("\n**************************")
         print(f"Step {i} response output from the agent:")
         print(response.output)
@@ -46,7 +52,7 @@ def run_agent(
                 try:
                     arguments_dict = parse_tool_arguments(item.arguments)  # Parse the JSON string into a dictionary
                 except ValueError as e:
-                    input_list.append( 
+                    history.append( 
                         {
                             "type": "function_call_output", 
                             "call_id": item.call_id, 
@@ -64,7 +70,7 @@ def run_agent(
                 result = execute_tool_safely(item.name, arguments_dict)  # Execute the tool with the provided arguments
                 print("Result of tool execution:", result)
 
-                input_list.append(
+                history.append(
                     {
                         "type": "function_call_output", 
                         "call_id": item.call_id, 
@@ -84,6 +90,9 @@ def main():
     # Load variables from .env
     load_dotenv()
 
+    # Load the history from a file if it exists
+    history = load_history("conversation.json")
+
     # Read your API key
     api_key = os.getenv("OPENAI_API_KEY")
 
@@ -91,9 +100,12 @@ def main():
     client = OpenAI(api_key=api_key)
 
     user_request = input("Enter your request: ")
-    response = run_agent(client, user_request)
+    response = run_agent(client, user_request, history=history)
     print("\nFinal response from the agent:")
     print(response)
+
+    # Save the updated history to a file
+    save_history("conversation.json", history)
 
 if __name__ == "__main__":
     main()

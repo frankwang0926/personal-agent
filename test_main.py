@@ -1,8 +1,114 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
+from copy import deepcopy
+
+import pytest
+from openai.types.responses import (
+    ResponseFunctionToolCall,
+    ResponseOutputMessage,
+    ResponseOutputText,
+    ResponseReasoningItem,
+)
+
+import main as agent_main
+from state import load_history, save_history
 
 from main import run_agent
 import json
+
+
+def final_message(message_id, text):
+    return ResponseOutputMessage(
+        id=message_id,
+        type="message",
+        role="assistant",
+        status="completed",
+        phase="final_answer",
+        content=[ResponseOutputText(type="output_text", text=text, annotations=[])],
+    )
+
+
+def test_run_agent_updates_supplied_empty_history():
+    history = []
+    message = final_message("msg_empty", "Hello")
+    client = Mock()
+    client.responses.create.return_value = SimpleNamespace(
+        output=[message], output_text="Hello"
+    )
+
+    assert run_agent(client, "Hi", history=history) == "Hello"
+    assert history == [{"role": "user", "content": "Hi"}, message]
+    assert client.responses.create.call_args.kwargs["input"] is history
+
+
+def test_cli_restores_saved_tool_history_on_next_run(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(agent_main, "load_dotenv", lambda: None)
+    prompts = iter(["Calculate 2 + 3", "What was the result?"])
+    monkeypatch.setattr("builtins.input", lambda _: next(prompts))
+    first_answer = final_message("msg_first", "5")
+    next_answer = final_message("msg_next", "The previous result was 5")
+    replies = iter([
+        SimpleNamespace(
+            output=[
+                ResponseReasoningItem(id="rs_cli", type="reasoning", summary=[]),
+                ResponseFunctionToolCall(
+                    id="fc_cli", type="function_call", name="calculator",
+                    arguments='{"a":2,"b":3,"operation":"add"}',
+                    call_id="call_cli",
+                ),
+            ],
+            output_text="",
+        ),
+        SimpleNamespace(output=[first_answer], output_text="5"),
+        SimpleNamespace(output=[next_answer], output_text="The previous result was 5"),
+    ])
+    requests = []
+    client = Mock()
+
+    def respond(**kwargs):
+        requests.append(deepcopy(kwargs))
+        return next(replies)
+
+    client.responses.create.side_effect = respond
+    monkeypatch.setattr(agent_main, "OpenAI", lambda **kwargs: client)
+
+    agent_main.main()
+    first_saved = load_history("conversation.json")
+    assert [item.get("type", item.get("role")) for item in first_saved] == [
+        "user", "reasoning", "function_call", "function_call_output", "message"
+    ]
+    assert first_saved[2]["call_id"] == first_saved[3]["call_id"] == "call_cli"
+    assert json.loads(first_saved[3]["output"]) == {"ok": True, "result": 5}
+    assert first_saved[-1]["phase"] == "final_answer"
+
+    agent_main.main()
+    assert len(requests) == 3
+    assert requests[2]["input"] == first_saved + [
+        {"role": "user", "content": "What was the result?"}
+    ]
+    assert load_history("conversation.json") == requests[2]["input"] + [
+        next_answer.model_dump(mode="json", exclude_none=True)
+    ]
+
+
+def test_cli_does_not_overwrite_saved_history_after_failed_turn(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(agent_main, "load_dotenv", lambda: None)
+    monkeypatch.setattr(agent_main, "OpenAI", lambda **kwargs: Mock())
+    monkeypatch.setattr("builtins.input", lambda _: "New request")
+    path = tmp_path / "conversation.json"
+    save_history(str(path), [{"role": "user", "content": "Previously saved"}])
+    before = path.read_bytes()
+
+    def fail(client, user_request, history):
+        history.append({"role": "user", "content": user_request})
+        raise RuntimeError("Simulated failed turn")
+
+    monkeypatch.setattr(agent_main, "run_agent", fail)
+    with pytest.raises(RuntimeError, match="Simulated failed turn"):
+        agent_main.main()
+    assert path.read_bytes() == before
 
 def test_run_agent_handles_invalid_arguments():
     bad_call = SimpleNamespace(
