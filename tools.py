@@ -1,5 +1,5 @@
 import json
-
+from memory import remember, recall
 
 def calculator(a: float, b: float, operation: str) -> float:
     if operation == "add":
@@ -15,7 +15,11 @@ def calculator(a: float, b: float, operation: str) -> float:
     else:
         raise ValueError("Invalid operation")
 
-TOOL_REGISTRY = {"calculator": calculator}
+TOOL_REGISTRY = {
+    "calculator": calculator, 
+    "remember": remember, 
+    "recall": recall
+    }
 
 def execute_tool(tool_name: str, arguments: dict):
     if tool_name not in TOOL_REGISTRY:

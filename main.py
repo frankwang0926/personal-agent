@@ -1,15 +1,30 @@
 from state import load_history, save_history
-from tools import CALCULATOR_TOOL, execute_tool, execute_tool_safely, parse_tool_arguments
+from tools import CALCULATOR_TOOL, execute_tool_safely, parse_tool_arguments
+from memory_schemas import REMEMBER_TOOL, RECALL_TOOL
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
 import json
 
-system_prompt = (
-                "You are a calculator assistant. "
-                "Use the calculator tool for arithmetic. "
-                "Base your final answer on the returned tool result."
-            )
+system_prompt = """
+You are a personal assistant with calculator and persistent memory tools.
+
+Use calculator for arithmetic and base your answer on its returned result.
+
+Use remember only when the user explicitly asks you to store or update a fact.
+Choose a stable, descriptive key such as project_name. Preserve an exact key
+provided by the user.
+
+Use recall to retrieve stored facts by their exact keys. If the key is unclear,
+ask the user to clarify. Never invent a stored fact.
+
+Check each tool result's ok field. Claim success only when ok is true.
+If recall reports a missing fact, explain that it was not found.
+If another tool fails, explain the error or correct the request when appropriate.
+
+Clearly distinguish facts found in conversation history from facts retrieved
+using recall. Keep responses concise.
+"""
 
 def run_agent(
     client: OpenAI,
@@ -31,7 +46,7 @@ def run_agent(
         i += 1
         response = client.responses.create(
             model="gpt-6-luna",
-            tools=[CALCULATOR_TOOL],
+            tools=[CALCULATOR_TOOL, REMEMBER_TOOL, RECALL_TOOL],
             input=history,
             instructions=system_prompt,
         )

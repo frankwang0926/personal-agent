@@ -21,3 +21,6 @@ __pycache__/
 
 # Local conversation state
 /conversation.json
+
+# Local personal memory
+/memory.json

@@ -110,6 +110,90 @@ def test_cli_does_not_overwrite_saved_history_after_failed_turn(tmp_path, monkey
         agent_main.main()
     assert path.read_bytes() == before
 
+def test_agent_recalls_memory_with_fresh_conversation(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    def run_memory_turn(name, arguments, prompt, answer):
+        requests = []
+        client = Mock()
+        replies = iter([
+            SimpleNamespace(
+                output=[ResponseFunctionToolCall(
+                    id=f"fc_{name}", type="function_call", name=name,
+                    call_id=f"call_{name}", arguments=json.dumps(arguments),
+                )],
+                output_text="",
+            ),
+            SimpleNamespace(
+                output=[final_message(f"msg_{name}", answer)], output_text=answer
+            ),
+        ])
+
+        def respond(**kwargs):
+            requests.append(deepcopy(kwargs))
+            return next(replies)
+
+        client.responses.create.side_effect = respond
+        history = []
+        assert run_agent(client, prompt, max_steps=2, history=history) == answer
+        assert len(requests) == 2
+        assert requests[0]["input"] == [{"role": "user", "content": prompt}]
+        assert {tool["name"] for tool in requests[0]["tools"]} == {
+            "calculator", "remember", "recall"
+        }
+        results = [item for item in requests[1]["input"]
+                   if isinstance(item, dict)
+                   and item.get("type") == "function_call_output"]
+        assert len(results) == 1
+        assert results[0]["call_id"] == f"call_{name}"
+        return json.loads(results[0]["output"])
+
+    stored = run_memory_turn(
+        "remember", {"key": "project_name", "value": "Mini Agent"},
+        "Remember project_name as Mini Agent", "Stored",
+    )
+    assert stored == {"ok": True, "result": None}
+    assert json.loads((tmp_path / "memory.json").read_text(encoding="utf-8")) == {
+        "project_name": "Mini Agent"
+    }
+
+    retrieved = run_memory_turn(
+        "recall", {"key": "project_name"},
+        "Recall project_name", "Mini Agent",
+    )
+    assert retrieved == {"ok": True, "result": "Mini Agent"}
+    assert not (tmp_path / "conversation.json").exists()
+
+
+def test_agent_reports_missing_memory_and_continues(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    client = Mock()
+    requests = []
+    replies = iter([
+        SimpleNamespace(output=[ResponseFunctionToolCall(
+            id="fc_missing", type="function_call", name="recall",
+            call_id="call_missing", arguments='{"key":"unknown"}',
+        )], output_text=""),
+        SimpleNamespace(output=[], output_text="No stored fact was found"),
+    ])
+
+    def respond(**kwargs):
+        requests.append(deepcopy(kwargs))
+        return next(replies)
+
+    client.responses.create.side_effect = respond
+    assert run_agent(client, "Recall unknown", max_steps=2) == "No stored fact was found"
+    assert len(requests) == 2
+    result = requests[1]["input"][-1]
+    assert result["type"] == "function_call_output"
+    assert result["call_id"] == "call_missing"
+    payload = json.loads(result["output"])
+    assert payload["ok"] is False
+    assert payload["error"]["type"] == "ValueError"
+    assert payload["error"]["message"]
+    assert not (tmp_path / "memory.json").exists()
+
+
 def test_run_agent_handles_invalid_arguments():
     bad_call = SimpleNamespace(
         type="function_call",
