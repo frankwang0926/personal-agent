@@ -30,3 +30,6 @@ __pycache__/
 
 # Local live-evaluation reports
 /eval-results/
+
+# Local Telegram polling checkpoint
+/telegram_cursor.json
