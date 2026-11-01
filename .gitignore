@@ -33,3 +33,5 @@ __pycache__/
 
 # Local Telegram polling checkpoint
 /telegram_cursor.json
+/telegram_conversation.json
+/telegram_inflight.json
