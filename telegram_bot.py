@@ -1,11 +1,46 @@
 import json
 import os
+import tempfile
 from functools import partial
+from pathlib import Path
 from urllib.error import URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from dotenv import load_dotenv
+
+
+def load_cursor(path: str) -> int | None:
+    try:
+        with open(path, "r", encoding="utf-8") as file:
+            data = json.load(file)
+    except FileNotFoundError:
+        return None
+
+    if not isinstance(data, dict):
+        raise ValueError("Telegram cursor file must contain an object with next_offset.")
+    next_offset = data.get("next_offset")
+    if type(next_offset) is not int or next_offset < 0:
+        raise ValueError("Telegram next_offset must be a nonnegative integer.")
+    return next_offset
+
+
+def save_cursor(path: str, next_offset: int) -> None:
+    if type(next_offset) is not int or next_offset < 0:
+        raise ValueError("Telegram next_offset must be a nonnegative integer.")
+
+    destination = Path(path)
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=destination.parent, delete=False,
+        ) as file:
+            temporary_path = Path(file.name)
+            json.dump({"next_offset": next_offset}, file, indent=2)
+        os.replace(temporary_path, destination)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def get_updates(token: str, offset: int | None = None) -> list:
@@ -27,14 +62,18 @@ def get_updates(token: str, offset: int | None = None) -> list:
     return data["result"]
 
 
-def poll_updates(token: str, handle_update) -> None:
-    offset = None
+def poll_updates(token: str, handle_update, cursor_path: str = "telegram_cursor.json") -> None:
+    offset = load_cursor(cursor_path)
     while True:
         updates = get_updates(token, offset)
         for update in updates:
+            if offset is not None and update["update_id"] < offset:
+                continue
             handle_update(update)
-            # Advance only after this update was successfully handled or skipped.
-            offset = update["update_id"] + 1
+            # Checkpoint before acknowledging this update in the next request.
+            next_offset = update["update_id"] + 1
+            save_cursor(cursor_path, next_offset)
+            offset = next_offset
 
 
 def send_message(token: str, chat_id: int, text: str) -> None:

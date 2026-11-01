@@ -11,8 +11,9 @@ import telegram_bot
 
 
 @pytest.fixture(autouse=True)
-def fake_owner(monkeypatch):
+def fake_owner(monkeypatch, tmp_path):
     monkeypatch.setenv("TELEGRAM_ALLOWED_USER_ID", "456")
+    monkeypatch.chdir(tmp_path)
 
 
 @pytest.mark.parametrize("token", [None, "", "   "])
@@ -193,3 +194,83 @@ def test_failed_send_stops_before_acknowledging_update(monkeypatch, response):
     with pytest.raises(RuntimeError):
         telegram_bot.poll_updates("fake-test-token", handle)
     receive.assert_called_once_with("fake-test-token", None)
+
+
+def test_cursor_missing_and_round_trip(tmp_path):
+    path = str(tmp_path / "cursor.json")
+    assert telegram_bot.load_cursor(path) is None
+    telegram_bot.save_cursor(path, 0)
+    assert telegram_bot.load_cursor(path) == 0
+    telegram_bot.save_cursor(path, 43)
+    assert telegram_bot.load_cursor(path) == 43
+
+
+@pytest.mark.parametrize("data", [[], {}, {"next_offset": None},
+    {"next_offset": True}, {"next_offset": -1}, {"next_offset": 1.5},
+    {"next_offset": "43"}])
+def test_invalid_cursor_stops_before_polling(tmp_path, monkeypatch, data):
+    path = tmp_path / "cursor.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    receive = Mock()
+    monkeypatch.setattr(telegram_bot, "get_updates", receive)
+    with pytest.raises(ValueError):
+        telegram_bot.poll_updates("fake-test-token", Mock(), str(path))
+    receive.assert_not_called()
+
+
+def test_malformed_cursor_is_preserved_and_not_reset(tmp_path, monkeypatch):
+    path = tmp_path / "cursor.json"
+    path.write_text('{"next_offset":', encoding="utf-8")
+    receive = Mock()
+    monkeypatch.setattr(telegram_bot, "get_updates", receive)
+    with pytest.raises(json.JSONDecodeError):
+        telegram_bot.poll_updates("fake-test-token", Mock(), str(path))
+    receive.assert_not_called()
+    assert path.read_text(encoding="utf-8") == '{"next_offset":'
+
+
+def test_restart_restores_checkpoint_and_ignores_stale_updates(tmp_path, monkeypatch):
+    path = str(tmp_path / "cursor.json")
+    handled = []
+
+    def handle(update):
+        # The checkpoint must still describe the prior completed update here.
+        assert telegram_bot.load_cursor(path) == (None if not handled else 41)
+        handled.append(update)
+
+    first = Mock(side_effect=[[{"update_id": 40}], KeyboardInterrupt()])
+    monkeypatch.setattr(telegram_bot, "get_updates", first)
+    with pytest.raises(KeyboardInterrupt):
+        telegram_bot.poll_updates("fake-test-token", handle, path)
+    assert telegram_bot.load_cursor(path) == 41
+
+    second = Mock(side_effect=[[
+        {"update_id": 39}, {"update_id": 40}, {"update_id": 42},
+    ], [], KeyboardInterrupt()])
+    monkeypatch.setattr(telegram_bot, "get_updates", second)
+    with pytest.raises(KeyboardInterrupt):
+        telegram_bot.poll_updates("fake-test-token", handle, path)
+
+    assert handled == [{"update_id": 40}, {"update_id": 42}]
+    assert [call.args[1] for call in first.call_args_list] == [None, 41]
+    assert [call.args[1] for call in second.call_args_list] == [41, 43, 43]
+    assert telegram_bot.load_cursor(path) == 43
+
+
+def test_checkpoint_replacement_failure_preserves_state_and_stops(tmp_path, monkeypatch):
+    path = tmp_path / "cursor.json"
+    telegram_bot.save_cursor(str(path), 40)
+    before = path.read_bytes()
+    receive = Mock(return_value=[{"update_id": 40}, {"update_id": 41}])
+    monkeypatch.setattr(telegram_bot, "get_updates", receive)
+    handler = Mock()
+    replace = Mock(side_effect=OSError("Simulated replacement failure"))
+    monkeypatch.setattr(telegram_bot.os, "replace", replace)
+
+    with pytest.raises(OSError, match="replacement failure"):
+        telegram_bot.poll_updates("fake-test-token", handler, str(path))
+
+    handler.assert_called_once_with({"update_id": 40})
+    receive.assert_called_once_with("fake-test-token", 40)
+    assert path.read_bytes() == before
+    assert set(tmp_path.iterdir()) == {path}
