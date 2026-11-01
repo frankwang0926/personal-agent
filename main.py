@@ -7,6 +7,9 @@ from dotenv import load_dotenv
 import os
 import json
 
+class StepLimitExceeded(RuntimeError):
+    pass
+
 system_prompt = """
 You are a personal assistant with calculator, persistent memory, and task tools.
 
@@ -103,8 +106,8 @@ def run_agent(
             print("i:", i)
             return response.output_text
 
-        if i == max_steps:
-            raise RuntimeError("Maximum steps reached. The agent did not provide a final answer.") 
+        if i == max_steps: 
+            raise StepLimitExceeded("Maximum steps reached. The agent did not provide a final answer.")
 
 def main():
     # Load variables from .env
@@ -119,13 +122,21 @@ def main():
     # Initialize the client
     client = OpenAI(api_key=api_key)
 
-    user_request = input("Enter your request: ")
-    response = run_agent(client, user_request, history=history)
-    print("\nFinal response from the agent:")
-    print(response)
+    while True:
+        try:
+            user_request = input("Enter your request: ").strip()
+        except EOFError:
+            break
+        if user_request == "/exit":
+            break
+        if user_request == "":
+            continue
+        response = run_agent(client, user_request, history=history)
+        print("\nFinal response from the agent:")
+        print(response)
 
-    # Save the updated history to a file
-    save_history("conversation.json", history)
+        # Save the updated history to a file
+        save_history("conversation.json", history)
 
 if __name__ == "__main__":
     main()

@@ -44,7 +44,7 @@ def test_run_agent_updates_supplied_empty_history():
 def test_cli_restores_saved_tool_history_on_next_run(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(agent_main, "load_dotenv", lambda: None)
-    prompts = iter(["Calculate 2 + 3", "What was the result?"])
+    prompts = iter(["Calculate 2 + 3", "/exit", "What was the result?", "/exit"])
     monkeypatch.setattr("builtins.input", lambda _: next(prompts))
     first_answer = final_message("msg_first", "5")
     next_answer = final_message("msg_next", "The previous result was 5")
@@ -90,6 +90,69 @@ def test_cli_restores_saved_tool_history_on_next_run(tmp_path, monkeypatch):
     assert load_history("conversation.json") == requests[2]["input"] + [
         next_answer.model_dump(mode="json", exclude_none=True)
     ]
+
+
+def test_cli_keeps_context_and_saves_each_turn(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(agent_main, "load_dotenv", lambda: None)
+    client = Mock()
+    constructor = Mock(return_value=client)
+    monkeypatch.setattr(agent_main, "OpenAI", constructor)
+    prompts = iter(["  Hello  ", "   ", "Follow up", "/exit"])
+    first_answer = final_message("msg_chat_first", "Hello back")
+    second_answer = final_message("msg_chat_second", "Follow-up answer")
+    requests = []
+
+    def read_input(_):
+        prompt = next(prompts)
+        if prompt == "   ":
+            assert load_history("conversation.json") == [
+                {"role": "user", "content": "Hello"},
+                first_answer.model_dump(mode="json", exclude_none=True),
+            ]
+        return prompt
+
+    monkeypatch.setattr("builtins.input", read_input)
+    replies = iter([first_answer, second_answer])
+
+    def respond(**kwargs):
+        requests.append(deepcopy(kwargs["input"]))
+        message = next(replies)
+        return SimpleNamespace(output=[message], output_text=message.content[0].text)
+
+    client.responses.create.side_effect = respond
+    agent_main.main()
+
+    constructor.assert_called_once()
+    assert requests == [
+        [{"role": "user", "content": "Hello"}],
+        [{"role": "user", "content": "Hello"}, first_answer,
+         {"role": "user", "content": "Follow up"}],
+    ]
+    assert load_history("conversation.json") == [
+        {"role": "user", "content": "Hello"},
+        first_answer.model_dump(mode="json", exclude_none=True),
+        {"role": "user", "content": "Follow up"},
+        second_answer.model_dump(mode="json", exclude_none=True),
+    ]
+
+
+@pytest.mark.parametrize("end_input", ["  /exit  ", EOFError()])
+def test_cli_exits_without_model_call_or_history_write(tmp_path, monkeypatch, end_input):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(agent_main, "load_dotenv", lambda: None)
+    client = Mock()
+    monkeypatch.setattr(agent_main, "OpenAI", lambda **kwargs: client)
+    monkeypatch.setattr("builtins.input", Mock(side_effect=[end_input]))
+    # Fail promptly if a local command is incorrectly dispatched to the agent.
+    agent = Mock(side_effect=AssertionError("Exit must not reach run_agent"))
+    monkeypatch.setattr(agent_main, "run_agent", agent)
+
+    agent_main.main()
+
+    agent.assert_not_called()
+    client.responses.create.assert_not_called()
+    assert not (tmp_path / "conversation.json").exists()
 
 
 def test_cli_does_not_overwrite_saved_history_after_failed_turn(tmp_path, monkeypatch):
