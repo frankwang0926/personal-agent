@@ -155,6 +155,80 @@ def test_cli_exits_without_model_call_or_history_write(tmp_path, monkeypatch, en
     assert not (tmp_path / "conversation.json").exists()
 
 
+@pytest.mark.parametrize("exhausted", [False, True])
+def test_agent_last_request_returns_answer_or_records_tool_result(exhausted):
+    client = Mock()
+    history = []
+    if exhausted:
+        output = [ResponseFunctionToolCall(
+            id="fc_limit", type="function_call", name="calculator",
+            arguments='{"a":2,"b":3,"operation":"add"}', call_id="call_limit",
+        )]
+    else:
+        output = [final_message("msg_limit", "5")]
+    client.responses.create.return_value = SimpleNamespace(output=output, output_text="5")
+
+    if exhausted:
+        with pytest.raises(agent_main.StepLimitExceeded):
+            run_agent(client, "Calculate", max_steps=1, history=history)
+        assert history[-1]["call_id"] == "call_limit"
+        assert json.loads(history[-1]["output"]) == {"ok": True, "result": 5}
+    else:
+        assert run_agent(client, "Calculate", max_steps=1, history=history) == "5"
+    client.responses.create.assert_called_once()
+
+
+def test_cli_saves_interrupted_turn_and_accepts_next_message(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(agent_main, "load_dotenv", lambda: None)
+    client = Mock()
+    monkeypatch.setattr(agent_main, "OpenAI", lambda **kwargs: client)
+    prompts = iter(["Long calculation", "Hello again", "/exit"])
+    saved_interruption = []
+
+    def read_input(_):
+        prompt = next(prompts)
+        if prompt == "Hello again":
+            saved_interruption.extend(load_history("conversation.json"))
+        return prompt
+
+    monkeypatch.setattr("builtins.input", read_input)
+    replies = [SimpleNamespace(
+        output=[ResponseFunctionToolCall(
+            id=f"fc_limit_{i}", type="function_call", name="calculator",
+            arguments='{"a":2,"b":3,"operation":"add"}', call_id=f"call_limit_{i}",
+        )], output_text="",
+    ) for i in range(5)]
+    final = final_message("msg_after_limit", "Hello back")
+    replies.append(SimpleNamespace(output=[final], output_text="Hello back"))
+    requests = []
+
+    def respond(**kwargs):
+        requests.append(deepcopy(kwargs["input"]))
+        return replies[len(requests) - 1]
+
+    client.responses.create.side_effect = respond
+    agent_main.main()
+
+    assert len(requests) == 6
+    assert saved_interruption[0] == {"role": "user", "content": "Long calculation"}
+    notice = saved_interruption[-1]
+    assert notice["role"] == "assistant"
+    assert isinstance(notice["content"], str) and notice["content"].strip()
+    assert notice["content"] in capsys.readouterr().out
+    calls = [item for item in saved_interruption if item.get("type") == "function_call"]
+    results = [item for item in saved_interruption if item.get("type") == "function_call_output"]
+    assert len(calls) == len(results) == 5
+    assert [item["call_id"] for item in calls] == [item["call_id"] for item in results]
+    assert all(json.loads(item["output"]) == {"ok": True, "result": 5} for item in results)
+    next_input = [item if isinstance(item, dict) else
+                  item.model_dump(mode="json", exclude_none=True) for item in requests[-1]]
+    assert next_input == saved_interruption + [{"role": "user", "content": "Hello again"}]
+    assert load_history("conversation.json") == next_input + [
+        final.model_dump(mode="json", exclude_none=True)
+    ]
+
+
 def test_cli_does_not_overwrite_saved_history_after_failed_turn(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(agent_main, "load_dotenv", lambda: None)

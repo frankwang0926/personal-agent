@@ -131,7 +131,12 @@ def main():
             break
         if user_request == "":
             continue
-        response = run_agent(client, user_request, history=history)
+        try:
+            response = run_agent(client, user_request, history=history)
+        except StepLimitExceeded:
+            response = "This request reached the step limit without a final answer. Some actions may already have been performed. You can continue sending messages."
+            history.append({"role": "assistant", "content": response})
+        
         print("\nFinal response from the agent:")
         print(response)
 
